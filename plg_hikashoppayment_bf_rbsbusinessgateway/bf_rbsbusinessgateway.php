@@ -1,12 +1,11 @@
 <?php
 /**
- * @package		HikaShop for Joomla!
- * @subpackage	Payment Plug-in for RBS Worldpay Business Gateway.
- * @version		3.0.1
- * @author		brainforge.co.uk
- * @copyright	(C) 2011 Brainforge derive from Paypal plug-in by HIKARI SOFTWARE. All rights reserved.
- * @copyright	(C) 2014-2017 HIKARI SOFTWARE. All rights reserved.
- * @license		GNU/GPLv3 http://www.gnu.org/licenses/gpl-3.0.html
+ * @package		 HikaShop for Joomla!
+ * @subpackage Payment Plug-in for RBS Worldpay Business Gateway.
+ * @version		 3.0.1
+ * @author		 brainforge.co.uk
+ * @copyright	 (C) 2011 Brainforge derive from Paypal plug-in by HIKARI SOFTWARE. All rights reserved.
+ * @license		 GNU/GPLv3 http://www.gnu.org/licenses/gpl-3.0.html
  *
  * In order to configure and use this plug-in you must have a Worldpay Business Gateway account.
  * Worldpay Business Gateway is sometimes refered to as 'Select Junior'.
@@ -26,8 +25,22 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 	var $name = 'bf_rbsbusinessgateway';
 
 	var $pluginConfig = array(
+		'testMode' => array('Test Mode', 'boolean', '0'),
 		'instid' => array('Installation ID', 'input'),
+		'accId1' => array('Merchant Code (Optional)', 'input'),
 		'url' => array('URL', 'input'),
+		'authMode' => array(
+			'Authentication Mode',
+			'list',
+			array(
+				'A' => 'Full Auth',
+				'E' => 'Pre Auth'
+			)
+		),
+		'enable_pn_pw' => array('Enable Payment Notifications Password', 'boolean', '0'),
+		'pn_pw' => array('Payment Notifications Password', 'input'),
+		'enable_md5' => array('Enable MD5 Encryption', 'boolean', '0'),
+		'md5_secret' => array('MD5 Encyption Secret Word', 'input'),
 		'descProductName' => array('Use Single Product Name in Description', 'boolean', '0'),
 		'desc' => array('Default Description', 'big-textarea'),
 		'displayForGuests' => array('Display for guest users', 'boolean', '0'),
@@ -46,7 +59,6 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 		'notification' => array('ALLOW_NOTIFICATIONS_FROM_X', 'boolean', '1'),
 		'debug' => array('DEBUG', 'boolean', '0'),
 		'showVars' => array('Show Parameters', 'boolean', '0'),
-		'testMode' => array('Test Mode', 'boolean', '0'),
 		'hostname' => array('Notification hostname', 'input'),
 		'address_format' => array('Address name format', 'input'),
 		'ips' => array('IPS', 'big-textarea'),
@@ -69,8 +81,9 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 	 *
 	 */
 	function onPaymentDisplay(&$order,&$methods,&$usable_methods){
-		if(!$this->isShippingValid(@$order->shipping))
+		if(!$this->isShippingValid(@$order->shipping) ) {
 			return true;
+		}
 
 		$this->user = hikashop_loadUser(true);
 		return parent::onPaymentDisplay($order, $methods, $usable_methods);
@@ -80,7 +93,7 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 	 *
 	 */
 	function checkPaymentDisplay(&$method, &$order) {
-		if(!empty($method->payment_params->testMode)) {
+		if(!empty($method->payment_params->testMode) ) {
 			if(isset($this->user->user_tester) && @$this->user->user_tester != 'Y') {
 				return false;
 			}
@@ -98,8 +111,9 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 	 *
 	 */
 	function onBeforeOrderCreate(&$order,&$do) {
-		if(empty($order->order_payment_method) || $order->order_payment_method!='bf_rbsbusinessgateway')
+		if(empty($order->order_payment_method) || $order->order_payment_method!='bf_rbsbusinessgateway') {
 			return;
+		}
 
 		if(!$this->isShippingValid(@$order->cart->shipping)) {
 			$do = false;
@@ -154,35 +168,61 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 
 		$x = isset($order->cart->products);
 		$y = isset($order->products);
+		$currency_int_frac_digits = (int) $this->currency->currency_locale['int_frac_digits'];
+		$wp_amount = number_format(round($order->order_full_price, $currency_int_frac_digits), $currency_int_frac_digits, '.', '');
+		
 		$vars = array(
-			'instId'   => $method->payment_params->instid,
+			'instId'   => trim($method->payment_params->instid),
 			'cartId'   => $order->order_id,
-			'amount'   => number_format(round($order->order_full_price, (int)$this->currency->currency_locale['int_frac_digits']), (int)$this->currency->currency_locale['int_frac_digits'], '.', ''),
+			'amount'   => $wp_amount,
 			'currency' => $this->currency->currency_code,
 		);
-
+		
+		//Merchant Code accId
+		if (!empty($method->payment_params->accId1)) {
+			$vars['accId1'] = trim($method->payment_params->accId1);
+		}
+		
+		//Authentication Mode
+		$authMode = (!isset($method->payment_params->authMode) ? 'A' : $method->payment_params->authMode);
+		$vars['authMode'] = $authMode;
+		
+		//MD5 Encryption 
+		if (!empty($method->payment_params->enable_md5) && (int) $method->payment_params->enable_md5 === 1 && !empty($method->payment_params->md5_secret) && $method->payment_params->md5_secret !== '') {
+			
+			$signatureFields = $method->payment_params->md5_secret . ':' . trim($method->payment_params->instid) . ':' . $wp_amount . ':' . $this->currency->currency_code . ':' . $order->order_id;
+			echo $signatureFields;
+			
+			$fingerprint = md5( $signatureFields);
+			$vars['signatureFields'] = 'instId:amount:currency:cartId';
+			$vars['signature'] = $fingerprint;
+		}
+		
 		if (!empty($method->payment_params->descProductName) && count($order->cart->products) == 1) {
 			foreach($order->cart->products as $product) {
 				$vars['desc'] = substr($product->order_product_name, 0, 255);
 			}
 		} else {
-			$vars['desc'] = substr($method->payment_params->desc, 0, 255);
+			$vars['desc'] = substr($method->payment_params->desc,0,255);
 		}
+		
+		
 
-		// Prepare parameters before sending them to payment gateway:
+		// Prepare parameters before sending them to payment gateway :
 		if (!empty($method->payment_params->notification) ) {
 			$vars['MC_callback'] = HIKASHOP_LIVE.'index.php?option=com_hikashop&ctrl=checkout&task=notify&notif_payment=' . $method->payment_type . '&tmpl=component&lang='.$this->locale;
 		}
 
-		if (!empty($method->payment_params->fixContact)) {
+		if (!empty($method->payment_params->fixContact) ) {
 			$vars['fixContact'] = null;
 		}
 
-		if (!empty($method->payment_params->hideContact)) {
+		if (!empty($method->payment_params->hideContact) ) {
 			$vars['hideContact'] = null;
 		}
 
 		if(!empty($method->payment_params->address_type)) {
+
 			switch ($method->payment_params->address_type) {
 				case 'billing';
 					$this->addAddress($this->user, $order, 'billing_address', $vars);
@@ -198,7 +238,7 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 			}
 		}
 
-		if (!empty($method->payment_params->testMode)) {
+		if (!empty($method->payment_params->testMode) ) {
 			$vars['testMode'] = '100';
 		}
 
@@ -212,15 +252,16 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 		$group = $config->get('group_options',0);
 
 		foreach($order->cart->products as $product) {
-			if($group && $product->order_product_option_parent_id)
+			if($group && $product->order_product_option_parent_id) {
 				continue;
+			}
 
 			$vars["C_item_name_".$i]=substr($product->order_product_name,0,127);
 			$vars["C_item_number_".$i]=$product->order_product_code;
 			$vars["C_quantity_".$i]=$product->order_product_quantity;
 
-			$amount_item=round($product->order_product_price,(int)$this->currency->currency_locale['int_frac_digits']);
-			$tax_item =round($product->order_product_tax,(int)$this->currency->currency_locale['int_frac_digits']);
+			$amount_item=round($product->order_product_price, $currency_int_frac_digits);
+			$tax_item =round($product->order_product_tax, $currency_int_frac_digits);
 
 			if (!empty($method->payment_params->show_tax_amount)) {
 				$tax_cart+=($tax_item*$product->order_product_quantity);
@@ -232,37 +273,37 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 			$i++;
 		}
 
-		if(!empty($order->order_shipping_price) || !empty($order->cart->shipping->shipping_name)) {
+		if(!empty($order->order_shipping_price) || !empty($order->cart->shipping->shipping_name) ) {
 
 			$vars["C_item_name_".$i] = JText::_('HIKASHOP_SHIPPING');
 
-			if(empty($order->order_shipping_price)) {
+			if(empty($order->order_shipping_price) ) {
 				$vars["C_amount_".$i] = 0;
 			} elseif (!empty($method->payment_params->show_tax_amount) && !empty($order->cart->shipping->shipping_price) ) {
-				$amount_item = round($order->cart->shipping->shipping_price,(int)$this->currency->currency_locale['int_frac_digits']);
-				$tax_item = round($order->cart->shipping->shipping_price_with_tax,(int)$this->currency->currency_locale['int_frac_digits'])-$amount_item;
+				$amount_item = round($order->cart->shipping->shipping_price, $currency_int_frac_digits);
+				$tax_item = round($order->cart->shipping->shipping_price_with_tax,$currency_int_frac_digits)-$amount_item;
 				$tax_cart += $tax_item;
 				$vars["C_amount_".$i] = $amount_item;
 			} else {
-				$vars["C_amount_".$i] = round($order->order_shipping_price,(int)$this->currency->currency_locale['int_frac_digits']);
+				$vars["C_amount_".$i] = round($order->order_shipping_price, $currency_int_frac_digits);
 			}
 
-			$vars["C_quantity_".$i] = 1;
-			if (empty($order->cart->shipping->shipping_name)) {
+			$vars["C_quantity_".$i]=1;
+			if (empty($order->cart->shipping->shipping_name) ) {
 				$vars["item_number_".$i]= $order->order_shipping_method;
 			} else {
-				$vars["C_item_number_".$i] = ucwords($order->cart->shipping->shipping_name);
+				$vars["C_item_number_".$i]= ucwords($order->cart->shipping->shipping_name);
 			}
 
 			$i++;
 		}
 
-		if(bccomp($tax_cart,0,5)) {
-			$vars['C_tax_cart'] = $tax_cart;
+		if(bccomp($tax_cart,0,5) ) {
+			$vars['C_tax_cart']=$tax_cart;
 		}
 
-		if(!empty($order->cart->coupon)) {
-			$vars["C_discount_amount_cart"] = round($order->cart->coupon->discount_value,(int)$this->currency->currency_locale['int_frac_digits']);
+		if(!empty($order->cart->coupon) ) {
+			$vars["C_discount_amount_cart"] = round($order->cart->coupon->discount_value, $currency_int_frac_digits);
 		}
 
 		$this->vars = $vars;
@@ -279,30 +320,32 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 		$filter = JFilterInput::getInstance();
 
 		foreach($_POST as $key => $value) {
+
 			$key = $filter->clean($key);
 
-			// Get Data send by payment gateway:
-			if(preg_match("#^[0-9a-z_-]{1,30}$#i", $key) && !preg_match("#^cmd$#i", $key)) {
+			// Get Data send by payment gateway :
+			if(preg_match("#^[0-9a-z_-]{1,30}$#i",$key)&&!preg_match("#^cmd$#i",$key) ) {
 				$value = JRequest::getString($key);
 				$vars[$key] = $value;
 				$data[] = $key . '=' . urlencode($value);
 			}
 		}
 
-		// Get order thanks to data recieved from payment gateway:
+		// Get order thanks to data recieved from payment gateway :
 		$data = implode('&',$data).'&cmd=_notify-validate';
 		$order_id = (int)@$vars['cartId'];
 		$dbOrder = $this->getOrder($order_id);
 
-		if(empty($dbOrder)) {
+		if(empty($dbOrder) ) {
 			echo "Could not load any order for your notification ".@$vars['cartId'];
 			return false;
 		}
 
 		$this->loadPaymentParams($dbOrder);
 
-		if(empty($this->payment_params))
+		if(empty($this->payment_params) ) {
 			return false;
+		}
 
 		if($this->payment_params->debug) {
 			echo print_r($vars,true)."\n\n\n";
@@ -311,8 +354,27 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 
 		$this->loadOrderData($dbOrder);
 
-		if(@$vars['instId'] != $this->payment_params->instid)
+		if(@$vars['instId'] != $this->payment_params->instid) {
 			return false;
+		}
+		
+		if($this->payment_params->enable_pn_pw === 1)
+		{
+				
+			if(!isset($vars['callbackPW']))
+			{
+				echo "<br>Callback Password not set in Worldpay Server :";
+				print $ret;
+				return;
+			}
+		
+			if( $vars['callbackPW'] !== trim($this->payment_params->pn_pw))
+			{
+				echo "<br>WorldPay Callback Password not matched :";
+				print $ret;
+				return;
+			}
+		}
 
 		$url = HIKASHOP_LIVE.'administrator/index.php?option=com_hikashop&ctrl=order&task=edit&order_id='.$order_id;
 		$order_text = "\r\n".JText::sprintf('NOTIFICATION_OF_ORDER_ON_WEBSITE',hikashop_encode($dbOrder),HIKASHOP_LIVE);
@@ -323,21 +385,21 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 		if(!empty($element->payment_params->hostname) ) {
 			// \.outbound\.wp3\.rbsworldpay\.com
 			$hostname = gethostbyaddr($ip);
-			$hostError = (!preg_match('#' . $this->payment_params->hostname . '#i', $hostname));
+			$hostError = (!preg_match('#' . $this->payment_params->hostname . '#i', $hostname) );
 		}
 
-		if($hostError === null && !empty($this->payment_params->ips)) {
-			$ips = str_replace(
-				array('.','*',','),
+		if ($hostError === null && !empty($this->payment_params->ips) ) {
+			$ips = str_replace(array('.','*',','),
 				array('\.','[0-9]+','|'),
 				$this->payment_params->ips
 			);
 
-			if(!empty($ips))
-				$hostError = (!preg_match('#('.implode('|',$ips).')#', $ip));
+			if (!empty($ips) ) {
+				$hostError = (!preg_match('#('.implode('|',$ips).')#',$ip) );
+			}
 		}
 
-		if(!empty($hostError)) {
+		if (!empty($hostError)) {
 
 			$email = new stdClass();
 			$email->subject = JText::sprintf('NOTIFICATION_REFUSED_FOR_THE_ORDER', 'Worldpay Business Gateway') . ' ' . JText::sprintf('IP_NOT_VALID', hikashop_encode($dbOrder));
@@ -351,11 +413,11 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 
 			$this->modifyOrder($order_id, $this->payment_params->invalid_status, false, $email);
 
-			JError::raiseError(403, JText::_('Access Forbidden'));
+			JError::raiseError( 403, JText::_( 'Access Forbidden' ) );
 			return false;
 		}
 
-		if($vars['transStatus'] != 'Y') {
+		if ($vars['transStatus'] != 'Y') {
 
 			$email = new stdClass();
 			$email->subject = JText::sprintf('PAYMENT_NOTIFICATION_FOR_ORDER', 'Worldpay Business Gateway', $vars['transStatus'], $dbOrder->order_number);
@@ -432,7 +494,7 @@ class plgHikashoppaymentbf_rbsbusinessgateway extends hikashopPaymentPlugin
 			return false;
 		}
 
-		if($vars['transStatus'] != 'Y') {
+		if ($vars['transStatus'] != 'Y') {
 			$payment_status = 'Unknown';
 			$order_status = $this->payment_params->invalid_status;
 			$order_text = JText::sprintf('CHECK_DOCUMENTATION', HIKASHOP_HELPURL.'payment-rbsworldpay-error#pending') .
